@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0f1115">
+<title>RoomWatch</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #181b22; --line: #2a2f3a; --text: #e8eaf0; --muted: #9aa3b2;
+    --accent: #4f8cff; --ok: #2fbf71; --warn: #f2a93b; --bad: #ef4b4b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 16px 16px 48px; }
+  h1 { font-size: 20px; margin: 4px 0 12px; display: flex; align-items: center; gap: 10px; }
+  .pill { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: var(--line); color: var(--muted); }
+  .pill.armed { background: var(--ok); color: #fff; }
+  .pill.arming { background: var(--warn); color: #111; }
+  .pill.alert { background: var(--bad); color: #fff; }
+  .video-wrap { position: relative; background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 4/3; border: 1px solid var(--line); }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .video-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 20px; }
+  .meter { margin: 12px 0 4px; height: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; position: relative; overflow: hidden; }
+  .meter-fill { height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+  .meter-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--bad); }
+  .meter-label { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+  button { font: inherit; font-weight: 600; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    padding: 11px 16px; border-radius: 10px; cursor: pointer; }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+  details { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 4px 14px; margin: 12px 0; }
+  summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
+  label { display: block; margin: 10px 0 14px; font-size: 13px; color: var(--muted); }
+  label > span.v { color: var(--text); font-weight: 600; }
+  input[type=text], input[type=url], input[type=password], input[type=number], select {
+    display: block; width: 100%; margin-top: 5px; padding: 9px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
+  input[type=range] { width: 100%; margin-top: 6px; }
+  .inline { display: flex; gap: 8px; } .inline input { flex: 1; } .inline button { margin-top: 5px; padding: 8px 12px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  #log { list-style: none; padding: 0; margin: 0; }
+  #log li { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  #log li img { width: 96px; border-radius: 6px; flex-shrink: 0; }
+  #log .t { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 64px; }
+  #blackout { position: fixed; inset: 0; background: #000; z-index: 50; display: none;
+    align-items: flex-end; justify-content: center; color: #222; font-size: 12px; padding-bottom: 24px; user-select: none; }
+  #blackout.on { display: flex; }
+  #blackout .dot { position: fixed; top: 14px; right: 14px; width: 6px; height: 6px; border-radius: 50%; background: #0a3; opacity: .35; }
+  #pinDialog { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 60; display: none; align-items: center; justify-content: center; }
+  #pinDialog.on { display: flex; }
+  #pinDialog .box { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; width: min(320px, 90vw); }
+  #queueNote { font-size: 12px; color: var(--warn); }
+</style>
+</head>
+<body>
+<main>
+  <h1>RoomWatch <span id="status" class="pill">Camera off</span></h1>
+
+  <div class="video-wrap">
+    <video id="video" playsinline muted autoplay></video>
+    <div id="videoMsg" class="video-msg">Tap “Start camera” and allow camera access.</div>
+  </div>
+
+  <div class="meter"><div id="meterFill" class="meter-fill"></div><div id="meterMark" class="meter-mark"></div></div>
+  <div class="meter-label"><span>Motion: <span id="motionPct">0.0</span>%</span><span>Trigger at <span id="threshPct">1.5</span>%</span></div>
+  <div id="queueNote"></div>
+
+  <div class="row">
+    <button id="btnCamera" class="primary">Start camera</button>
+    <button id="btnArm" disabled>Arm</button>
+    <button id="btnDisarm" class="danger" disabled>Disarm</button>
+    <button id="btnBlack" disabled>Blackout screen</button>
+    <button id="btnTest">Send test alert</button>
+  </div>
+
+  <details id="settingsBox">
+    <summary>Settings</summary>
+
+    <label>ntfy topic (treat it like a password)
+      <div class="inline">
+        <input id="topic" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. rw-8fK2mQx7Lp4vT9zN">
+        <button id="btnGen" type="button">Generate</button>
+      </div>
+      <div class="hint">Subscribe to exactly this topic in the ntfy app on your phone.</div>
+    </label>
+
+    <label>ntfy server
+      <input id="server" type="url" placeholder="https://ntfy.sh">
+    </label>
+
+    <label>Device / room name (shown in alerts)
+      <input id="room" type="text" placeholder="e.g. Marriott 1412">
+    </label>
+
+    <label>Camera
+      <select id="cameraSel"><option value="">Default (rear camera if available)</option></select>
+    </label>
+
+    <label>Sensitivity — trigger when <span class="v" id="sensVal">1.5</span>% of the picture changes
+      <input id="sens" type="range" min="0.3" max="10" step="0.1">
+      <div class="hint">Lower = more sensitive. Watch the motion meter while you walk past to tune it.</div>
+    </label>
+
+    <label>Arming delay: <span class="v" id="delayVal">60</span> s
+      <input id="delay" type="range" min="10" max="300" step="5">
+      <div class="hint">Time to leave the room before watching starts.</div>
+    </label>
+
+    <label>Photos per event: <span class="v" id="burstVal">3</span>
+      <input id="burst" type="range" min="1" max="5" step="1">
+      <div class="hint">Taken a few seconds apart, so you see who came in, not just the door opening.</div>
+    </label>
+
+    <label>Quiet time after an event: <span class="v" id="coolVal">30</span> s
+      <input id="cool" type="range" min="10" max="300" step="5">
+    </label>
+
+    <label>Heartbeat URL (optional, e.g. Healthchecks.io ping URL)
+      <input id="hb" type="url" placeholder="https://hc-ping.com/your-uuid">
+      <div class="hint">Pinged every minute while this page is open. If pings stop, that service alerts you.</div>
+    </label>
+
+    <label>Disarm PIN (optional)
+      <input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="Leave blank for none">
+      <div class="hint">Every disarm also sends you an alert, so you'll know if someone else does it.</div>
+    </label>
+  </details>
+
+  <details open>
+    <summary>Event log (this session)</summary>
+    <ul id="log"></ul>
+  </details>
+</main>
+
+<div id="blackout"><div class="dot"></div>Double-tap to wake</div>
+
+<div id="pinDialog"><div class="box">
+  <div style="font-weight:600;margin-bottom:8px">Enter PIN to disarm</div>
+  <input id="pinEntry" type="password" inputmode="numeric" autocomplete="off">
+  <div class="row" style="margin-bottom:0"><button id="pinOk" class="danger">Disarm</button><button id="pinCancel">Cancel</button></div>
+</div></div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- Settings ----------
+  const DEFAULTS = { topic: '', server: 'https://ntfy.sh', room: '', camera: '', sens: 1.5, delay: 60, burst: 3, cool: 30, hb: '', pin: '' };
+  const KEY = 'roomwatch.settings.v1';
+  let S = { ...DEFAULTS };
+  try { S = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch (_) {}
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (_) {} };
+
+  const $ = id => document.getElementById(id);
+  const el = {
+    video: $('video'), videoMsg: $('videoMsg'), status: $('status'),
+    meterFill: $('meterFill'), meterMark: $('meterMark'), motionPct: $('motionPct'), threshPct: $('threshPct'),
+    btnCamera: $('btnCamera'), btnArm: $('btnArm'), btnDisarm: $('btnDisarm'), btnBlack: $('btnBlack'), btnTest: $('btnTest'),
+    topic: $('topic'), server: $('server'), room: $('room'), cameraSel: $('cameraSel'),
+    sens: $('sens'), delay: $('delay'), burst: $('burst'), cool: $('cool'), hb: $('hb'), pin: $('pin'),
+    log: $('log'), blackout: $('blackout'), queueNote: $('queueNote'),
+    pinDialog: $('pinDialog'), pinEntry: $('pinEntry'), pinOk: $('pinOk'), pinCancel: $('pinCancel'),
+  };
+
+  function bindText(id) { el[id].value = S[id]; el[id].addEventListener('change', () => { S[id] = el[id].value.trim(); save(); }); }
+  function bindRange(id, outId) {
+    el[id].value = S[id]; $(outId).textContent = S[id];
+    el[id].addEventListener('input', () => { S[id] = parseFloat(el[id].value); $(outId).textContent = S[id]; save(); updateThresholdUI(); });
+  }
+  ['topic', 'server', 'room', 'hb', 'pin'].forEach(bindText);
+  bindRange('sens', 'sensVal'); bindRange('delay', 'delayVal'); bindRange('burst', 'burstVal'); bindRange('cool', 'coolVal');
+  if (!S.topic) $('settingsBox').open = true;
+
+  $('btnGen').addEventListener('click', () => {
+    const abc = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const bytes = crypto.getRandomValues(new Uint8Array(18));
+    S.topic = 'rw-' + Array.from(bytes, b => abc[b % abc.length]).join('');
+    el.topic.value = S.topic; save();
+  });
+
+  // ---------- State ----------
+  let stream = null, state = 'off'; // off | ready | arming | armed
+  let armTimer = null, armDeadline = 0, warmupUntil = 0, coolUntil = 0, consecutive = 0;
+  let wakeLock = null;
+
+  function setState(s, text) {
+    state = s;
+    el.status.className = 'pill' + (s === 'armed' ? ' armed' : s === 'arming' ? ' arming' : '');
+    el.status.textContent = text || ({ off: 'Camera off', ready: 'Disarmed', arming: 'Arming…', armed: 'Armed' })[s];
+    el.btnArm.disabled = s !== 'ready';
+    el.btnDisarm.disabled = !(s === 'arming' || s === 'armed');
+    el.btnBlack.disabled = s === 'off';
+  }
+  function flashAlert() {
+    el.status.className = 'pill alert'; el.status.textContent = 'Motion!';
+    setTimeout(() => { if (state === 'armed') setState('armed'); }, 4000);
+  }
+  function updateThresholdUI() {
+    el.threshPct.textContent = S.sens.toFixed(1);
+    el.meterMark.style.left = Math.min(100, S.sens * 5) + '%'; // meter shows 0–20%
+  }
+  updateThresholdUI();
+  const where = () => S.room ? ` (${S.room})` : '';
+  const nowStr = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  // ---------- Notifications via ntfy (with offline retry queue) ----------
+  const queue = [];
+  function ntfyUrl(params) {
+    const base = (S.server || DEFAULTS.server).replace(/\/+$/, '');
+    const q = new URLSearchParams(params).toString();
+    return `${base}/${encodeURIComponent(S.topic)}?${q}`;
+  }
+  async function rawSend(item) {
+    // POST with no custom headers = "simple" CORS request (no preflight). Metadata goes in query params.
+    const res = await fetch(ntfyUrl(item.params), { method: 'POST', body: item.body });
+    if (!res.ok) throw new Error('ntfy HTTP ' + res.status);
+  }
+  async function notify(params, body) {
+    if (!S.topic) { addLog('⚠️ No ntfy topic set — alert not sent.'); return false; }
+    let item;
+    if (body) item = { params, body };              // photo: binary body + message in query params
+    else { const { message = '', ...rest } = params; item = { params: rest, body: message }; } // text: message is the body
+    try { await rawSend(item); return true; }
+    catch (e) { queue.push(item); updateQueueNote(); return false; }
+  }
+  function updateQueueNote() {
+    el.queueNote.textContent = queue.length ? `⚠️ ${queue.length} alert(s) waiting for internet — retrying…` : '';
+  }
+  setInterval(async () => {
+    while (queue.length) {
+      try { await rawSend(queue[0]); queue.shift(); } catch (_) { break; }
+    }
+    updateQueueNote();
+  }, 15000);
+
+  // ---------- Heartbeat ----------
+  function heartbeat() {
+    if (!S.hb) return;
+    fetch(S.hb, { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
+  }
+  setInterval(heartbeat, 60000);
+
+  // ---------- Camera ----------
+  async function listCameras() {
+    try {
+      const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+      el.cameraSel.innerHTML = '<option value="">Default (rear camera if available)</option>' +
+        devs.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Camera ' + (i + 1)}</option>`).join('');
+      el.cameraSel.value = S.camera || '';
+    } catch (_) {}
+  }
+  el.cameraSel.addEventListener('change', async () => { S.camera = el.cameraSel.value; save(); if (stream) await startCamera(); });
+
+  async function startCamera() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      el.videoMsg.textContent = 'This browser can’t access the camera. Open the page over https (e.g. GitHub Pages) in Safari, Chrome or Edge.';
+      return;
+    }
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    const video = S.camera ? { deviceId: { exact: S.camera } } : { facingMode: { ideal: 'environment' } };
+    Object.assign(video, { width: { ideal: 1280 }, height: { ideal: 960 } });
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+    } catch (e) {
+      el.videoMsg.textContent = 'Camera access failed: ' + e.message;
+      return;
+    }
+    el.video.srcObject = stream;
+    await el.video.play().catch(() => {});
+    el.videoMsg.style.display = 'none';
+    el.btnCamera.textContent = 'Restart camera';
+    stream.getVideoTracks()[0].addEventListener('ended', () => {
+      addLog('⚠️ Camera stopped.');
+      if (state === 'armed') notify({ title: `RoomWatch: camera stopped${where()}`, message: 'The camera feed ended while armed.', tags: 'warning', priority: '5' });
+    });
+    if (state === 'off') setState('ready');
+    listCameras();
+    requestWakeLock();
+    startDetector();
+  }
+  el.btnCamera.addEventListener('click', startCamera);
+
+  async function requestWakeLock() {
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
+  }
+
+  // ---------- Motion detection ----------
+  const W = 160, H = 120, PIXEL_DIFF = 28, SAMPLE_MS = 250;
+  const small = document.createElement('canvas'); small.width = W; small.height = H;
+  const sctx = small.getContext('2d', { willReadFrequently: true });
+  let prev = null, detectorTimer = null;
+
+  function sampleFrame() {
+    if (el.video.readyState < 2) return null;
+    sctx.drawImage(el.video, 0, 0, W, H);
+    const d = sctx.getImageData(0, 0, W, H).data;
+    const g = new Uint8Array(W * H); let sum = 0;
+    for (let i = 0, j = 0; i < d.length; i += 4, j++) { const v = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8; g[j] = v; sum += v; }
+    return { g, mean: sum / g.length };
+  }
+  function changedPercent(a, b) {
+    // Compensate for camera auto-exposure: remove the overall brightness shift before comparing.
+    const shift = b.mean - a.mean; let n = 0;
+    for (let i = 0; i < a.g.length; i++) if (Math.abs(b.g[i] - a.g[i] - shift) > PIXEL_DIFF) n++;
+    return { pct: (n / a.g.length) * 100, lightJump: Math.abs(shift) > 40 };
+  }
+  function startDetector() {
+    if (detectorTimer) return;
+    detectorTimer = setInterval(tick, SAMPLE_MS);
+  }
+  function tick() {
+    const cur = sampleFrame(); if (!cur) return;
+    if (!prev) { prev = cur; return; }
+    const { pct, lightJump } = changedPercent(prev, cur);
+    prev = cur;
+    el.motionPct.textContent = pct.toFixed(1);
+    el.meterFill.style.width = Math.min(100, pct * 5) + '%';
+    el.meterFill.style.background = pct >= S.sens ? 'var(--bad)' : 'var(--accent)';
+
+    if (state === 'arming') {
+      const left = Math.max(0, Math.ceil((armDeadline - Date.now()) / 1000));
+      el.status.textContent = `Arming in ${left}s`;
+      return;
+    }
+    if (state !== 'armed') return;
+    const now = Date.now();
+    if (now < warmupUntil || now < coolUntil) { consecutive = 0; return; }
+    if (pct >= S.sens || lightJump) consecutive++; else consecutive = 0;
+    if (consecutive >= 2) { consecutive = 0; onMotion(pct, lightJump); }
+  }
+
+  // ---------- Snapshots & events ----------
+  const big = document.createElement('canvas');
+  function snapshot() {
+    const vw = el.video.videoWidth, vh = el.video.videoHeight; if (!vw) return Promise.resolve(null);
+    const scale = Math.min(1, 1280 / vw);
+    big.width = Math.round(vw * scale); big.height = Math.round(vh * scale);
+    const c = big.getContext('2d'); c.drawImage(el.video, 0, 0, big.width, big.height);
+    c.fillStyle = 'rgba(0,0,0,.55)'; c.fillRect(0, big.height - 28, big.width, 28);
+    c.fillStyle = '#fff'; c.font = '16px sans-serif';
+    c.fillText(`RoomWatch${where()}  ${new Date().toLocaleString()}`, 8, big.height - 9);
+    return new Promise(r => big.toBlob(r, 'image/jpeg', 0.8));
+  }
+
+  async function onMotion(pct, lightJump) {
+    coolUntil = Date.now() + S.cool * 1000 + S.burst * 3000;
+    flashAlert();
+    const reason = lightJump ? 'Sudden light change (lights switched on/off?)' : `Motion detected (${pct.toFixed(1)}% of view changed)`;
+    for (let i = 0; i < S.burst; i++) {
+      if (state !== 'armed') break;
+      if (i > 0) await new Promise(r => setTimeout(r, 2500));
+      const blob = await snapshot(); if (!blob) continue;
+      const t = nowStr();
+      addLog(`${i === 0 ? '🚨 ' : ''}${reason} — photo ${i + 1}/${S.burst}`, blob);
+      const body = await blob.arrayBuffer();
+      notify({
+        title: `RoomWatch${where()}: ${i === 0 ? 'motion!' : 'photo ' + (i + 1)}`,
+        message: `${reason} at ${t}`,
+        filename: `roomwatch-${Date.now()}.jpg`,
+        tags: 'rotating_light', priority: i === 0 ? '5' : '4',
+      }, body);
+    }
+  }
+
+  function addLog(text, blob) {
+    const li = document.createElement('li');
+    if (blob) { const img = document.createElement('img'); img.src = URL.createObjectURL(blob); li.appendChild(img); }
+    const t = document.createElement('span'); t.className = 't'; t.textContent = nowStr();
+    const m = document.createElement('span'); m.textContent = text;
+    li.append(t, m); el.log.prepend(li);
+    while (el.log.children.length > 60) el.log.lastChild.remove();
+  }
+
+  // ---------- Arm / disarm ----------
+  el.btnArm.addEventListener('click', () => {
+    if (!S.topic) { $('settingsBox').open = true; el.topic.focus(); alertInline('Set an ntfy topic first.'); return; }
+    setState('arming');
+    armDeadline = Date.now() + S.delay * 1000;
+    addLog(`Arming — watching starts in ${S.delay}s.`);
+    clearTimeout(armTimer);
+    armTimer = setTimeout(() => {
+      setState('armed'); prev = null; consecutive = 0;
+      warmupUntil = Date.now() + 2000; coolUntil = 0;
+      addLog('✅ Armed.');
+      notify({ title: `RoomWatch armed${where()}`, message: `Watching since ${nowStr()}. You'll get photos if anything moves.`, tags: 'shield', priority: '2' });
+      heartbeat();
+    }, S.delay * 1000);
+  });
+
+  function doDisarm(by) {
+    clearTimeout(armTimer);
+    const wasArmed = state === 'armed';
+    setState(stream ? 'ready' : 'off');
+    addLog('Disarmed.');
+    if (wasArmed) notify({ title: `RoomWatch disarmed${where()}`, message: `Disarmed on the device at ${nowStr()}${by ? ' ' + by : ''}. If this wasn't you, someone is at your device.`, tags: 'unlock', priority: '4' });
+  }
+  el.btnDisarm.addEventListener('click', () => {
+    if (S.pin && state === 'armed') { el.pinEntry.value = ''; el.pinDialog.classList.add('on'); el.pinEntry.focus(); }
+    else doDisarm();
+  });
+  el.pinOk.addEventListener('click', () => {
+    if (el.pinEntry.value === S.pin) { el.pinDialog.classList.remove('on'); doDisarm('with PIN'); }
+    else {
+      el.pinEntry.value = ''; el.pinEntry.placeholder = 'Wrong PIN';
+      notify({ title: `RoomWatch: wrong PIN${where()}`, message: `Someone entered a wrong disarm PIN at ${nowStr()}.`, tags: 'warning', priority: '5' });
+      snapshot().then(b => b && b.arrayBuffer().then(buf => notify({ title: `RoomWatch: wrong PIN photo${where()}`, message: nowStr(), filename: `roomwatch-pin-${Date.now()}.jpg`, tags: 'warning', priority: '5' }, buf)));
+    }
+  });
+  el.pinCancel.addEventListener('click', () => el.pinDialog.classList.remove('on'));
+
+  function alertInline(msg) { el.queueNote.textContent = msg; setTimeout(updateQueueNote, 4000); }
+
+  // ---------- Blackout ----------
+  el.btnBlack.addEventListener('click', () => el.blackout.classList.add('on'));
+  let lastTap = 0;
+  el.blackout.addEventListener('click', () => {
+    const now = Date.now();
+    if (now - lastTap < 400) el.blackout.classList.remove('on');
+    lastTap = now;
+  });
+
+  // ---------- Test ----------
+  el.btnTest.addEventListener('click', async () => {
+    if (!S.topic) { $('settingsBox').open = true; alertInline('Set an ntfy topic first.'); return; }
+    const blob = stream ? await snapshot() : null;
+    const ok = blob
+      ? await notify({ title: `RoomWatch test${where()}`, message: `Test photo at ${nowStr()}`, filename: 'roomwatch-test.jpg', tags: 'white_check_mark' }, await blob.arrayBuffer())
+      : await notify({ title: `RoomWatch test${where()}`, message: `Test at ${nowStr()} — it works!`, tags: 'white_check_mark' });
+    addLog(ok ? 'Test alert sent — check your phone.' : 'Test alert failed — will retry when online.');
+  });
+
+  // ---------- Background / close warnings ----------
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { requestWakeLock(); return; }
+    if (state === 'armed' && S.topic) {
+      navigator.sendBeacon?.(ntfyUrl({ title: `RoomWatch paused${where()}`, message: 'The camera page left the screen while armed — monitoring may be paused.', tags: 'warning', priority: '5' }), 'RoomWatch page hidden');
+    }
+  });
+  window.addEventListener('pagehide', () => {
+    if (state === 'armed' && S.topic) {
+      navigator.sendBeacon?.(ntfyUrl({ title: `RoomWatch closed${where()}`, message: 'The camera page was closed or reloaded while armed.', tags: 'warning', priority: '5' }), 'RoomWatch page closed');
+    }
+  });
+
+  setState('off');
+  heartbeat();
+})();
+</script>
+</body>
+</html>
